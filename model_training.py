@@ -24,15 +24,17 @@ IMG_CHANNELS = 3
 data_dir = '../airbus_test_project/dataset/'  # посилання на папку, в якій знаходиться база данних
 epochs = 5
 image_shape = (768, 768)
-numb_test = 200  # кількість картинок, що буде задіяна для швидкої перевірки
-FAST_RUN = True  # використовується для більш швидкої перевірки роботи програми
+numb_test = 150  # кількість картинок, що буде задіяна для швидкої перевірки
+FAST_RUN = True  # використовується для більш швидкої перевірки роботи програми, якщо перевіряти на всій базі, треба замінити на False
 
-df = pd.read_csv(os.path.join(data_dir, 'train_ship_segmentations_update.csv'))
+df = pd.read_csv(os.path.join(data_dir, 'train_ship_segmentations_update.csv')) #Назва оновленної бази данних,
+                        # але в ній всеодно переважна кількість фотографій без кораблів,
+                        # можливо для покращення тренування має сенс видалити з бази данних фотографії без кораблів, або хоча б зменшити їх кількість
 
 no_mask = np.zeros(image_shape[0] * image_shape[1], dtype=np.uint8)
 
 
-# описуємо функцію для декодування пікселей з судами
+# описуємо функцію для декодування пікселей з судами, та побудову маски та картинки для моделі
 
 
 def rle_decode(mask_rle, shape=image_shape):
@@ -49,6 +51,36 @@ def rle_decode(mask_rle, shape=image_shape):
     for lo, hi in zip(starts, ends):
         img[lo:hi] = 1
     return img.reshape(shape).T
+
+
+def get_image(image_name):
+    img = imread(os.path.join(data_dir, 'train_v2/') + image_name)[:, :, :IMG_CHANNELS]
+    img = resize(img, (TARGET_WIDTH, TARGET_HEIGHT), mode='constant', preserve_range=True)
+    return img
+
+
+def get_mask(code):
+    img = rle_decode(code)
+    img = resize(img, (TARGET_WIDTH, TARGET_HEIGHT, 1), mode='constant', preserve_range=True)
+    return img
+
+def create_image_generator(precess_batch_size, data_df):
+    while True:
+        for k, group_df in data_df.groupby(np.arange(data_df.shape[0]) // precess_batch_size):
+            imgs = []
+            labels = []
+            for index, row in group_df.iterrows():
+                # images
+                original_img = get_image(row.ImageId) / 255.0
+                # masks
+                mask = get_mask(row.EncodedPixels) / 255.0
+
+                imgs.append(original_img)
+                labels.append(mask)
+
+            imgs = np.array(imgs)
+            labels = np.array(labels)
+            yield imgs, labels
 
 
 # опсиуэмо модель
@@ -166,47 +198,6 @@ model.compile(
     metrics=["accuracy"]
 )
 
-if FAST_RUN:
-    df = df.sample(numb_test).reset_index().drop(
-        columns=["index"])  # для швидкої перевірки роботи програми
-
-train_df, validate_df = train_test_split(df, test_size=0.3)
-
-
-def get_image(image_name):
-    img = imread(os.path.join(data_dir, 'train_v2/') + image_name)[:, :, :IMG_CHANNELS]
-    img = resize(img, (TARGET_WIDTH, TARGET_HEIGHT), mode='constant', preserve_range=True)
-    return img
-
-
-def get_mask(code):
-    img = rle_decode(code)
-    img = resize(img, (TARGET_WIDTH, TARGET_HEIGHT, 1), mode='constant', preserve_range=True)
-    return img
-
-
-def create_image_generator(precess_batch_size, data_df):
-    while True:
-        for k, group_df in data_df.groupby(np.arange(data_df.shape[0]) // precess_batch_size):
-            imgs = []
-            labels = []
-            for index, row in group_df.iterrows():
-                # images
-                original_img = get_image(row.ImageId) / 255.0
-                # masks
-                mask = get_mask(row.EncodedPixels) / 255.0
-
-                imgs.append(original_img)
-                labels.append(mask)
-
-            imgs = np.array(imgs)
-            labels = np.array(labels)
-            yield imgs, labels
-
-
-train_generator = create_image_generator(epochs, train_df)
-validate_generator = create_image_generator(epochs, validate_df)
-
 
 # описуємо коефіцієнти
 
@@ -224,6 +215,17 @@ def true_positive_rate(y_true, y_pred):
     return K.sum(K.flatten(y_true) * K.flatten(K.round(y_pred))) / K.sum(y_true)
 
 # описуємо модель
+
+
+if FAST_RUN:
+    df = df.sample(numb_test).reset_index().drop(
+        columns=["index"])  # для швидкої перевірки роботи програми
+
+train_df, validate_df = train_test_split(df, test_size=0.3)
+
+
+train_generator = create_image_generator(epochs, train_df)
+validate_generator = create_image_generator(epochs, validate_df)
 
 
 model.compile(optimizer=Adam(1e-4, decay=1e-6), loss=dice_p_bce,
