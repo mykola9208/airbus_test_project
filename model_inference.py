@@ -19,7 +19,6 @@ if FAST_PREDICTION:
 #завантажуємо результати тренування моделі
 model.load_weights('../airbus_test_project/seg_model_weights.best.hdf5')
 
-
 # описуємо функцію енкодера для маски, щоб записати потім у файл
 
 def rle_encode(img):
